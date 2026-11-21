@@ -48,15 +48,30 @@ local function Unwatch(q)
     end
 end
 
-local function CurrentZoneName()
+-- Set of names that count as "current zone": the map the player is on plus all parent maps up to
+-- (excluding) the continent, e.g. Darnassus -> Teldrassil. Quest log headers use the parent zone name.
+local function CurrentZoneNames()
+    local names = {}
     local mapID = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
-    local info = mapID and C_Map.GetMapInfo(mapID)
-    return info and info.name
+    local depth = 0
+    while mapID and mapID > 0 and depth < 10 do
+        local info = C_Map.GetMapInfo(mapID)
+        if not info then break end
+        if info.mapType and Enum and Enum.UIMapType and info.mapType <= Enum.UIMapType.Continent then break end
+        if info.name then names[info.name] = true end
+        mapID = info.parentMapID
+        depth = depth + 1
+    end
+    for _, fn in ipairs({ GetRealZoneText, GetZoneText }) do
+        local z = fn and fn()
+        if z and z ~= "" then names[z] = true end
+    end
+    return names
 end
 
-local function IsCategorySelected(name, zone)
+local function IsCategorySelected(name, zones)
     if DB.categories[name] then return true end
-    return DB.includeCurrentZone and zone and name == zone
+    return DB.includeCurrentZone and zones and zones[name] or false
 end
 
 -- ---------------------------------------------------------------- tracker tags
@@ -232,7 +247,7 @@ local function Apply()
     pending = false
     if not DB or not DB.enabled or applying then return end
     applying = true
-    local zone = CurrentZoneName()
+    local zone = CurrentZoneNames()
     for _, cat in ipairs(ScanLog()) do
         local want = IsCategorySelected(cat.name, zone)
         for _, q in ipairs(cat.quests) do
@@ -357,7 +372,7 @@ f:SetScript("OnEvent", function(self, event)
         SetupLDB()
         HookTracker()
         for _, e in ipairs({ "QUEST_ACCEPTED", "QUEST_LOG_UPDATE", "QUEST_WATCH_LIST_CHANGED",
-                             "ZONE_CHANGED_NEW_AREA", "QUEST_REMOVED" }) do
+                             "ZONE_CHANGED_NEW_AREA", "ZONE_CHANGED", "QUEST_REMOVED" }) do
             self:RegisterEvent(e)
         end
         C_Timer.After(3, Apply)
