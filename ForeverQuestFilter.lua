@@ -1,5 +1,6 @@
-local DB
-local defaults = { enabled = true, includeCurrentZone = false, alwaysComplete = false, objectiveInZone = false, categories = {}, alwaysTrack = {}, tagTracker = true }
+local DB, CDB
+local ready -- false until the per-character selection is loaded/migrated, so Apply never untracks too early
+local defaults = { enabled = true, includeCurrentZone = false, alwaysComplete = false, objectiveInZone = false, alwaysTrack = {}, tagTracker = true }
 
 local function Print(msg) print("|cff33ff99ForeverQuestFilter:|r " .. tostring(msg)) end
 
@@ -83,7 +84,7 @@ local function QuestsInCurrentZone(mapIDs)
 end
 
 local function IsCategorySelected(name, zones)
-    if DB.categories[name] then return true end
+    if CDB.categories[name] then return true end
     return DB.includeCurrentZone and zones and zones[name] or false
 end
 
@@ -251,14 +252,14 @@ local function UpdateText()
     if not obj then return end
     local tracked = C_QuestLog.GetNumQuestWatches and C_QuestLog.GetNumQuestWatches() or 0
     local n = 0
-    for _ in pairs(DB.categories) do n = n + 1 end
+    for _ in pairs(CDB.categories) do n = n + 1 end
     obj.text = ("%s%d tracked|r (%d cat.)"):format(DB.enabled and "|cff00ff00" or "|cff888888", tracked, n)
 end
 
 local applying, pending = false, false
 local function Apply()
     pending = false
-    if not DB or not DB.enabled or applying then return end
+    if not DB or not ready or not DB.enabled or applying then return end
     applying = true
     local zone, mapIDs = CurrentZoneNames()
     local inZone = DB.objectiveInZone and QuestsInCurrentZone(mapIDs) or nil
@@ -285,7 +286,7 @@ local function QueueApply()
 end
 
 local function ToggleCategory(name)
-    DB.categories[name] = (not DB.categories[name]) or nil
+    CDB.categories[name] = (not CDB.categories[name]) or nil
     Apply()
 end
 
@@ -322,15 +323,15 @@ local function ShowMenu(anchor)
             if #cats == 0 then root:CreateTitle("|cff888888(quest log empty)|r") end
             for _, cat in ipairs(cats) do
                 root:CreateCheckbox(("%s |cff888888(%d)|r"):format(cat.name, #cat.quests),
-                    function() return DB.categories[cat.name] and true or false end,
+                    function() return CDB.categories[cat.name] and true or false end,
                     function() ToggleCategory(cat.name) end)
             end
             root:CreateDivider()
             root:CreateButton("Select all", function()
-                for _, c in ipairs(cats) do DB.categories[c.name] = true end; Apply()
+                for _, c in ipairs(cats) do CDB.categories[c.name] = true end; Apply()
             end)
             root:CreateButton("Select none", function()
-                wipe(DB.categories); Apply()
+                wipe(CDB.categories); Apply()
             end)
         end)
     elseif EasyMenu then
@@ -348,7 +349,7 @@ local function ShowMenu(anchor)
         }
         for _, cat in ipairs(cats) do
             menu[#menu + 1] = { text = cat.name, isNotRadio = true, keepShownOnClick = true,
-                checked = DB.categories[cat.name] and true or false,
+                checked = CDB.categories[cat.name] and true or false,
                 func = function() ToggleCategory(cat.name) end }
         end
         EasyMenu(menu, dd, "cursor", 0, 0, "MENU")
@@ -376,7 +377,7 @@ local function SetupLDB()
             tt:AddLine("ForeverQuestFilter")
             tt:AddLine(DB.enabled and "|cff00ff00Enabled|r" or "|cffff4444Disabled|r")
             local any
-            for name in pairs(DB.categories) do
+            for name in pairs(CDB.categories) do
                 tt:AddLine("  " .. name, 1, 1, 1); any = true
             end
             if not any then tt:AddLine("  (no categories selected)", .6, .6, .6) end
@@ -395,13 +396,27 @@ f:SetScript("OnEvent", function(self, event)
         DB = ForeverQuestFilterDB
         for k, v in pairs(defaults) do if DB[k] == nil then DB[k] = v end end
         DB.alwaysTrack = DB.alwaysTrack or {}
+        -- selected categories are stored per character
+        ForeverQuestFilterCharDB = ForeverQuestFilterCharDB or {}
+        CDB = ForeverQuestFilterCharDB
+        local firstRun = CDB.categories == nil
+        CDB.categories = CDB.categories or {}
         SetupLDB()
         HookTracker()
         for _, e in ipairs({ "QUEST_ACCEPTED", "QUEST_LOG_UPDATE", "QUEST_WATCH_LIST_CHANGED",
                              "ZONE_CHANGED_NEW_AREA", "ZONE_CHANGED", "QUEST_REMOVED" }) do
             self:RegisterEvent(e)
         end
-        C_Timer.After(3, Apply)
+        C_Timer.After(3, function()
+            if firstRun and DB.categories then
+                -- one-time migration of the old account-wide selection: only categories this character has in its log
+                for _, cat in ipairs(ScanLog()) do
+                    if DB.categories[cat.name] then CDB.categories[cat.name] = true end
+                end
+            end
+            ready = true
+            Apply()
+        end)
         UpdateText()
     elseif not applying then
         QueueApply()
@@ -416,7 +431,7 @@ SlashCmdList.FOREVERQUESTFILTER = function(msg)
         DB.enabled = (cmd == "on"); Apply(); Print(cmd)
     elseif cmd == "list" then
         for _, c in ipairs(ScanLog()) do
-            Print(("%s %s (%d)"):format(DB.categories[c.name] and "[x]" or "[ ]", c.name, #c.quests))
+            Print(("%s %s (%d)"):format(CDB.categories[c.name] and "[x]" or "[ ]", c.name, #c.quests))
         end
     elseif cmd == "debug" then
         local mod = QuestObjectiveTracker
