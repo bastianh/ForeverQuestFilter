@@ -1,0 +1,9 @@
+## Interface: 16001
+## Title: ForeverQuestFilter
+## Notes: Bazooka/LDB quest tracker filter. Pick quest log categories (zones) that get auto-tracked; all others are auto-untracked.
+## Author: Dafire
+## Version: 1.0.0
+## OptionalDeps: Bazooka, Titan
+## SavedVariables: ForeverQuestFilterDB
+
+ForeverQuestFilter.lua
