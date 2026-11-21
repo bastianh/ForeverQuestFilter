@@ -1,5 +1,5 @@
 local DB
-local defaults = { enabled = true, includeCurrentZone = false, categories = {}, alwaysTrack = {}, tagTracker = true }
+local defaults = { enabled = true, includeCurrentZone = false, alwaysComplete = false, objectiveInZone = false, categories = {}, alwaysTrack = {}, tagTracker = true }
 
 local function Print(msg) print("|cff33ff99ForeverQuestFilter:|r " .. tostring(msg)) end
 
@@ -51,13 +51,14 @@ end
 -- Set of names that count as "current zone": the map the player is on plus all parent maps up to
 -- (excluding) the continent, e.g. Darnassus -> Teldrassil. Quest log headers use the parent zone name.
 local function CurrentZoneNames()
-    local names = {}
+    local names, mapIDs = {}, {}
     local mapID = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
     local depth = 0
     while mapID and mapID > 0 and depth < 10 do
         local info = C_Map.GetMapInfo(mapID)
         if not info then break end
         if info.mapType and Enum and Enum.UIMapType and info.mapType <= Enum.UIMapType.Continent then break end
+        mapIDs[#mapIDs + 1] = mapID
         if info.name then names[info.name] = true end
         mapID = info.parentMapID
         depth = depth + 1
@@ -66,7 +67,19 @@ local function CurrentZoneNames()
         local z = fn and fn()
         if z and z ~= "" then names[z] = true end
     end
-    return names
+    return names, mapIDs
+end
+
+-- Set of questIDs that have a map marker (objective / turn-in) on the current zone's maps
+local function QuestsInCurrentZone(mapIDs)
+    local set = {}
+    if not C_QuestLog.GetQuestsOnMap then return set end
+    for _, mapID in ipairs(mapIDs) do
+        for _, q in ipairs(C_QuestLog.GetQuestsOnMap(mapID) or {}) do
+            if q.questID then set[q.questID] = true end
+        end
+    end
+    return set
 end
 
 local function IsCategorySelected(name, zones)
@@ -247,12 +260,15 @@ local function Apply()
     pending = false
     if not DB or not DB.enabled or applying then return end
     applying = true
-    local zone = CurrentZoneNames()
+    local zone, mapIDs = CurrentZoneNames()
+    local inZone = DB.objectiveInZone and QuestsInCurrentZone(mapIDs) or nil
     for _, cat in ipairs(ScanLog()) do
         local want = IsCategorySelected(cat.name, zone)
         for _, q in ipairs(cat.quests) do
             local watched = IsWatched(q.id)
             local qWant = want or DB.alwaysTrack[GetTagLetter(q.id)]
+                or (DB.alwaysComplete and C_QuestLog.IsComplete and C_QuestLog.IsComplete(q.id))
+                or (inZone and inZone[q.id])
             if qWant and not watched then Watch(q)
             elseif not qWant and watched then Unwatch(q) end
         end
@@ -288,6 +304,12 @@ local function ShowMenu(anchor)
                 DB.tagTracker = not DB.tagTracker
                 if DB.tagTracker then TagTracker() else RefreshTracker() end
             end)
+            root:CreateCheckbox("Always show completed quests", function() return DB.alwaysComplete end, function()
+                DB.alwaysComplete = not DB.alwaysComplete; Apply()
+            end)
+            root:CreateCheckbox("Track quests with objective in current zone", function() return DB.objectiveInZone end, function()
+                DB.objectiveInZone = not DB.objectiveInZone; Apply()
+            end)
             local always = root:CreateButton("Always track (any category)")
             for _, t in ipairs({ { "E", "Elite quests" }, { "D", "Dungeon quests" }, { "R", "Raid quests" } }) do
                 always:CreateCheckbox(t[2], function() return DB.alwaysTrack[t[1]] and true or false end, function()
@@ -319,6 +341,10 @@ local function ShowMenu(anchor)
               checked = DB.enabled, func = function() DB.enabled = not DB.enabled; Apply() end },
             { text = "Always include current zone", isNotRadio = true, keepShownOnClick = true,
               checked = DB.includeCurrentZone, func = function() DB.includeCurrentZone = not DB.includeCurrentZone; Apply() end },
+            { text = "Always show completed quests", isNotRadio = true, keepShownOnClick = true,
+              checked = DB.alwaysComplete, func = function() DB.alwaysComplete = not DB.alwaysComplete; Apply() end },
+            { text = "Track quests with objective in current zone", isNotRadio = true, keepShownOnClick = true,
+              checked = DB.objectiveInZone, func = function() DB.objectiveInZone = not DB.objectiveInZone; Apply() end },
         }
         for _, cat in ipairs(cats) do
             menu[#menu + 1] = { text = cat.name, isNotRadio = true, keepShownOnClick = true,
